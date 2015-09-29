@@ -17,7 +17,7 @@
 //	p.OnRecv = func(addr *net.IPAddr, rtt time.Duration) {
 //		fmt.Printf("IP Addr: %s receive, RTT: %v\n", addr.String(), rtt)
 //	}
-//	p.OnIdle = func() {
+//	p.OnIdle = func(lost map[string]*net.IPAddr) {
 //		fmt.Println("finish")
 //	}
 //	err = p.Run()
@@ -147,7 +147,7 @@ type Pinger struct {
 	// elapsed time when Pinger receives a response packet.
 	OnRecv func(*net.IPAddr, time.Duration)
 	// OnIdle is called when MaxRTT time passed
-	OnIdle func()
+	OnIdle func(map[string]*net.IPAddr)
 	// If Debug is true, it prints debug messages to stdout.
 	Debug bool
 }
@@ -290,7 +290,7 @@ func (p *Pinger) RemoveIPAddr(ip *net.IPAddr) {
 //
 // "idle" handler should be
 //
-//	func()
+//	func(lost map[string]*net.IPAddr)
 //
 // type function. The handler is called when MaxRTT time passed. For more
 // detail, please see Run() and RunLoop().
@@ -305,13 +305,13 @@ func (p *Pinger) AddHandler(event string, handler interface{}) error {
 		}
 		return errors.New("receive event handler should be `func(*net.IPAddr, time.Duration)`")
 	case "idle":
-		if hdl, ok := handler.(func()); ok {
+		if hdl, ok := handler.(func(map[string]*net.IPAddr)); ok {
 			p.mu.Lock()
 			p.OnIdle = hdl
 			p.mu.Unlock()
 			return nil
 		}
-		return errors.New("idle event handler should be `func()`")
+		return errors.New("idle event handler should be `func(map[string]*net.IPAddr)`")
 	}
 	return errors.New("No such event: " + event)
 }
@@ -451,7 +451,7 @@ mainloop:
 			handler := p.OnIdle
 			p.mu.Unlock()
 			if handler != nil {
-				handler()
+				handler(queue)
 			}
 			if once || err != nil {
 				break mainloop
@@ -483,8 +483,7 @@ mainloop:
 func (p *Pinger) sendICMP(conn, conn6 *icmp.PacketConn) (map[string]*net.IPAddr, error) {
 	p.debugln("sendICMP(): Start")
 	p.mu.Lock()
-	p.id = rand.Intn(0xffff)
-	p.seq = rand.Intn(0xffff)
+	p.seq++
 	p.mu.Unlock()
 	queue := make(map[string]*net.IPAddr)
 	wg := new(sync.WaitGroup)
@@ -645,7 +644,7 @@ func (p *Pinger) procRecv(recv *packet, queue map[string]*net.IPAddr) {
 		return
 	}
 
-	var rtt time.Duration
+	var rtt time.Duration = 0
 	switch pkt := m.Body.(type) {
 	case *icmp.Echo:
 		p.mu.Lock()
@@ -657,6 +656,10 @@ func (p *Pinger) procRecv(recv *packet, queue map[string]*net.IPAddr) {
 		return
 	}
 
+	// Do not remove late packets from the queue
+	if rtt == 0 {
+		return
+	}
 	if _, ok := queue[addr]; ok {
 		delete(queue, addr)
 		p.mu.Lock()
