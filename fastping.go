@@ -484,6 +484,7 @@ func (p *Pinger) sendICMP(conn, conn6 *icmp.PacketConn) (map[string]*net.IPAddr,
 	p.debugln("sendICMP(): Start")
 	p.mu.Lock()
 	p.seq++
+	p.seq&=0xffff
 	p.mu.Unlock()
 	queue := make(map[string]*net.IPAddr)
 	wg := new(sync.WaitGroup)
